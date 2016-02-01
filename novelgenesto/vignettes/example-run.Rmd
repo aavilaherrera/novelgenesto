@@ -1,0 +1,175 @@
+---
+title: "Tara Oceans"
+author: "Aram Avila-Herrera"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = '#>')
+```
+
+The `novelgenesto` package accompanies supplemental methods for
+**NOVELGENES_TITLE_HERE** by **AUTHORLIST**. It contains functions to
+facilitate tests for association between environmental metadata from the Tara
+Oceans expedition and under-annotated protein families investigated in
+the manuscript (FUnkSFAMs).
+
+See [novelgeneshmp](https://github.com/aavilaherrera/novelgeneshmp) for
+a similar analysis in human microbiomes.
+
+## Finding associations between FUnkSFAM abundance and environmental metadata in Tara Oceans samples
+
+Load some dependencies and helper packages...
+
+```{r init-chunk, message = FALSE, warning = FALSE}
+library(novelgenesto)
+
+library(dplyr)     # data wrangling
+library(magrittr)  #
+library(tidyr)     #
+library(broom)     # turn things into data.frames
+library(readr)     # read/write with sensible defaults
+
+# file handling for vignette
+vignette_datapath = function(path){
+    extdata = system.file('extdata', package = 'novelgenesto')
+    paste0(extdata, '/', basename(path))
+}
+```
+
+### Configuration file
+
+The config file allows specification of predictor, outcome, and confounding
+variables that are either categorical or quantitative. One can also specify
+a grouping variable to stratify analyses (i.e. perform the same analysis on
+non-overlapping groups of observations).
+
+```{r config-chunk, message = FALSE, warning = FALSE}
+# Specify configuration filename
+config_fn = vignette_datapath('taraoceans_configv.json')
+
+# Uses jsonlite::fromJSON to load the config into a list
+config_l = load_config(config_fn)
+
+config_l
+```
+
+## Load the data
+
+Load Tara Oceans metadata and FUnkSFAM presence-absence.  The month a sample
+was collected in (`month`) is derived from the sample collection start date.
+`protocol_type` is parsed from `protocol_label`, and `fraction_cat` manually groups
+size fractions with similar filter thresholds (See function `add_extra_vars`).
+
+```{r input-chunk}
+# vignette hack
+config_l$counts_fn = vignette_datapath(config_l$counts_fn)
+config_l$rpkg_fn = vignette_datapath(config_l$rpkg_fn)
+config_l$metadata_fn = vignette_datapath(config_l$metadata_fn)
+config_l$span67_fn = vignette_datapath(config_l$span67_fn)
+
+# FUnkSFAM read counts
+counts_df = load_counts(config_l$counts_fn)
+counts_df %<>% select(-starts_with('X'),
+                      starts_with('X') %>% sample(100)  # subsample for vignette
+                      )
+
+presence_df = counts_to_presence(counts_df,
+                                 threshold = config_l$counts_threshold
+                                 )
+# sample metadata
+metadata_df = read_tsv(config_l$metadata_fn)
+
+# add extra variables (fraction_cat, month, protocol_type)
+metadata_df %<>% add_extra_vars()
+
+data_df = inner_join(presence_df, metadata_df)
+```
+
+## Clean the data
+
+```{r clean-chunk}
+# drop extraneous columns
+clean_df = data_df %>%
+    select(run_accession,                        # sample identifier
+           starts_with('X'),                     # FUnkSFAM identifiers
+           one_of(unlist(config_l$predictor)),   # environmental variables
+           one_of(unlist(config_l$confounder)),  # confounders
+           one_of(config_l$grouping)             # grouping variables
+           ) %>%
+    clean_99999(config_l$predictor$quantitative) %>%  # 99999 -> NA
+    clean_99999(config_l$confounder$quantitative)
+```
+
+## Quantify variation
+
+### "Phenotype" (predictors, confounders) and FUnkSFAM presence-absence
+
+The variation of FUnkSFAM presence-absence and other categorical variables
+(e.g. `environment_biome`) is quantified with entropy. Standard deviation is
+used for quantitative variables (e.g. `nitrate_sensor`)
+
+```{r qc-chunk}
+ph_stats_df = calc_phenotype_variation(clean_df, group = 'fraction_cat')
+ff_stats_df = calc_FUnkSFAM_variation(clean_df, group = 'fraction_cat')
+write_tsv(ph_stats_df, vignette_datapath('phenotype_variation.tsv'))
+write_tsv(ff_stats_df, vignette_datapath('FUnkSFAM_variation.tsv'))
+
+ph_stats_df
+ff_stats_df
+
+# subset most variable FUnkSFAMs for debugging
+#ff_top_H = as.character(ff_stats_df$FUNKID) %>% unique() %>% head(10)
+#clean_df = clean_df %>% select(-starts_with('X'), one_of(ff_top_H))
+#clean_df
+```
+
+## Fit logistic regression models and test for coefficients significantly larger than zero
+
+Coefficients from a logistic regression were used to identify likely
+associations between each environmental variable and presence of each FUnkSFAM.
+The models account for latitude, month, read depth (`count_reads`), and average
+genome size, and were fit for each group of size fractions (`fraction_cat`) and
+for each pair of environmental variable and FUnkSFAM.
+
+### Test each predictor, accounting for confounders
+
+This can take a long time, but is parallelizable (not implemented) as all
+models are fit independently.
+
+```{r model-chunk, warning = FALSE}
+results_df = do_glm_tests(clean_df, 'fraction_cat',
+                          confounders = unlist(config_l$confounder)
+                          )
+results_df
+write_tsv(results_df, vignette_datapath('results_raw.tsv'))
+```
+
+## Filter the results and adjust p-values for false discovery
+
+### Filtering functions
+
+| name                                             | removes tests for...                                             |
+|:-------------------------------------------------|:-----------------------------------------------------------------|
+| `filter_results_by_FFentropy_per_group`          | mostly present or absent FUnkSFAMs                               |
+| `filter_results_by_funksfam_annotation`          | phylogenetically narrow FUnkSFAMs or with 10 or more annotations |
+| `filter_unneeded_tests`                          | confounder coefficients                            |
+| `filter_results_all`                             | all of the above                                                 |
+
+```{r}
+final_results_df = results_df %>%
+        filter_results_all(ff_stats_df = ff_stats_df,
+                           config_l = config_l,
+                           group = 'fraction_cat'
+                           ) %>%
+        adjust_pvalues() %>%
+        format_final_results()
+final_results_df
+write_tsv(final_results_df, vignette_datapath('results_final.tsv'))
+```
+

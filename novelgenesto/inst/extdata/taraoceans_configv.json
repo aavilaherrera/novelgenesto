@@ -1,0 +1,43 @@
+{
+    "counts_fn"                     : "path/to/TO_counts.tsv",
+    "rpkg_fn"                       : "path/to/TO_RPKG.tsv",
+
+    "metadata_fn"                   : "path/to/tometadata_and_statistics.tsv.txt",
+    "span67_fn"                     : "path/to/span_6_7_annotations.tsv",
+
+    "counts_threshold"              : 1,
+
+    "predictor"                     : {
+        "quantitative"              : [
+            "latitude_start",
+            "longitude_start",
+            "latitude_end",
+            "longitude_end",
+            "depth",
+            "temperature",
+            "salinity_sensor",
+            "oxygen_sensor",
+            "nitrate_sensor",
+            "chlorophyll_sensor"
+        ],
+        "categorical"               : [
+            "environment_biome",
+            "environment_feature",
+            "environment_material",
+            "protocol_type"
+        ]
+    },
+    "grouping"                      : [
+        "fraction_cat"
+    ],
+    "confounder"                    : {
+        "quantitative"              : [
+            "count_reads",
+            "average_genome_size",
+            "latitude_start"
+        ],
+        "categorical"               : [
+            "month"
+        ]
+    }
+}

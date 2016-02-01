@@ -1,0 +1,142 @@
+---
+title: "Tara Oceans post analysis"
+author: "Aram Avila-Herrera"
+date: "`r Sys.Date()`"
+output:
+    html_document:
+        toc: true
+...
+
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = '#>', width = 125)
+options(width=125)
+```
+
+## load results
+
+```{r}
+library(dplyr)
+library(readr)
+library(magrittr)
+library(tidyr)
+
+res_df = read_tsv('./results_final.tsv',
+                  col_types = 'ccccddiddddddddidd'
+                  )
+```
+
+## summaries
+
+### Size fraction groups
+
+```{r}
+unique(res_df$fraction_cat)
+```
+
+### Number of tests
+
+#### total
+
+```{r}
+nrow(res_df)
+```
+
+#### by size fraction groups
+
+```{r}
+res_df %>% count(fraction_cat)
+```
+
+#### by term (coefficient name in glm)
+
+```{r}
+res_df %>% count(term)
+```
+
+#### by PHENONAME (environmental variable being tested)
+
+```{r}
+res_df %>% count(PHENONAME)
+```
+
+#### by size fraction group and PHENONAME
+
+```{r}
+res_df %>% count(fraction_cat, PHENONAME)
+```
+
+## significant tests (`p_adj_fdr < 0.05`)
+
+#### by size fraction and FUNKID
+
+```{r}
+res_df %>% filter(p_adj_fdr < 0.05) %>%
+           count(fraction_cat, FUNKID, sort = TRUE)
+```
+
+#### by size fraction group, FUNKID, and PHENONAME
+
+```{r}
+res_df %>% filter(p_adj_fdr < 0.05) %>%
+           count(fraction_cat, FUNKID, PHENONAME, sort = TRUE)
+```
+
+## $\Delta$BIC
+
+```{r}
+# extract "no predictors" model results
+nop_df = res_df %>% filter(PHENONAME == 'latitude_start') %>%
+                    select(fraction_cat, FUNKID, BIC_nop = BIC)
+
+# merge with results to get change in BICs (delBIC)
+res_df %<>% full_join(nop_df) %>% mutate(delBIC = BIC_nop - BIC) %>%
+            select(fraction_cat, FUNKID, term, PHENONAME, delBIC, p_adj_fdr,
+                   BIC, BIC_nop
+                   ) %>%
+            arrange(p_adj_fdr, desc(delBIC))
+
+res_df %>% select(-BIC, -BIC_nop)
+
+# significant tests where richer model fits better
+res_df %>% filter(p_adj_fdr < 0.05, delBIC > 6) %>%
+           count(fraction_cat, sort = TRUE)
+```
+
+#### By size fraction group and FUNKID
+
+```{r}
+res_df %>% filter(p_adj_fdr < 0.05, delBIC > 6) %>%
+           count(fraction_cat, FUNKID) %>% ungroup() %>% arrange(desc(n))
+```
+
+#### By FUNKID alone
+
+```{r}
+res_df %>% filter(p_adj_fdr < 0.05, delBIC > 6) %>%
+           count(FUNKID, sort = TRUE)
+```
+
+#### By size fraction group and PHENONAME
+
+```{r}
+res_df %>% filter(p_adj_fdr < 0.05, delBIC > 6) %>%
+           count(fraction_cat, PHENONAME) %>% ungroup() %>%
+           arrange(desc(n))
+```
+
+#### By PHENONAME alone
+
+```{r}
+res_df %>% filter(p_adj_fdr < 0.05, delBIC > 6) %>%
+           count(PHENONAME, sort = TRUE)
+```
+
+#### X6_49036
+
+```{r}
+res_df %>% filter(FUNKID == 'X6_49036', p_adj_fdr < 0.05) %>%
+           select(PHENONAME, fraction_cat,
+                  p_adj_fdr, delBIC, BIC, BIC_nop
+                  )
+```
